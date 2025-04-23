@@ -3,14 +3,27 @@
 { pkgs, ... }: {
   # Which nixpkgs channel to use.
   channel = "stable-23.11"; # or "unstable"
+  
   # Use https://search.nixos.org/packages to find packages
   packages = [
     pkgs.go
     pkgs.nodejs_20
     pkgs.nodePackages.nodemon
+    pkgs.postgresql
   ];
+ services = {
+  postgres = {
+    enable = true;  # Kích hoạt dịch vụ PostgreSQL
+    package = pkgs.postgresql;
+    
+  };
+};
   # Sets environment variables in the workspace
   env = {};
+
+  # Add PostgreSQL service with user 'hrm' and password '123456'
+  
+
   idx = {
     # Search for the extensions you want on https://open-vsx.org/ and use "publisher.id"
     extensions = [

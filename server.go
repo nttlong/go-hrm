@@ -1,75 +1,83 @@
-// Copyright 2023 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Hello is a simple hello, world demonstration web server.
-//
-// It serves version information on /version and answers
-// any other request like /name by saying "Hello, name!".
-//
-// See golang.org/x/example/outyet for a more sophisticated server.
 package main
 
 import (
-	"flag"
-	"fmt"
-	"html"
 	"log"
 	"net/http"
-	"os"
-	"runtime/debug"
-	"strings"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"vn.ghrm/internal/config"
+	"vn.ghrm/internal/db"
+	"vn.ghrm/internal/models"
 )
 
-func usage() {
-	fmt.Fprintf(os.Stderr, "usage: helloserver [options]\n")
-	flag.PrintDefaults()
-	os.Exit(2)
+type Server struct {
+	DB     *gorm.DB
+	Router *gin.Engine
 }
-
-var (
-	greeting = flag.String("g", "Hello", "Greet with `greeting`")
-	addr     = flag.String("addr", "localhost:8080", "address to serve")
-)
 
 func main() {
-	// Parse flags.
-	flag.Usage = usage
-	flag.Parse()
-
-	// Parse and validate arguments (none).
-	args := flag.Args()
-	if len(args) != 0 {
-		usage()
+	// Load configuration
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Register handlers.
-	// All requests not otherwise mapped with go to greet.
-	// /version is mapped specifically to version.
-	http.HandleFunc("/", greet)
-	http.HandleFunc("/version", version)
+	// Set up the database and user
+	if err := db.SetupDatabase(cfg); err != nil {
+		log.Fatalf("Failed to set up database: %v", err)
+	}
 
-	log.Printf("serving http://%s\n", *addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	// Initialize database connection with GORM
+	db, err := db.InitDB(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+	}()
+
+	// Set up the server
+	server := &Server{
+		DB:     db,
+		Router: gin.Default(),
+	}
+
+	// Define routes
+	server.setupRoutes()
+
+	// Start the server
+	addr := cfg.AppPort
+	log.Printf("Server starting on %s", addr)
+	if err := server.Router.Run(addr); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 }
 
-func version(w http.ResponseWriter, r *http.Request) {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		http.Error(w, "no build information available", 500)
+func (s *Server) setupRoutes() {
+	s.Router.GET("/api/employees", s.getEmployees)
+	s.Router.POST("/api/employees", s.createEmployee)
+}
+
+func (s *Server) getEmployees(c *gin.Context) {
+	var employees []models.Employee
+	if err := s.DB.Find(&employees).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	fmt.Fprintf(w, "<!DOCTYPE html>\n<pre>\n")
-	fmt.Fprintf(w, "%s\n", html.EscapeString(info.String()))
+	c.JSON(http.StatusOK, employees)
 }
 
-func greet(w http.ResponseWriter, r *http.Request) {
-	name := strings.Trim(r.URL.Path, "/")
-	if name == "" {
-		name = "Gopher"
+func (s *Server) createEmployee(c *gin.Context) {
+	var employee models.Employee
+	if err := c.ShouldBindJSON(&employee); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-
-	fmt.Fprintf(w, "<!DOCTYPE html>\n")
-	fmt.Fprintf(w, "%s, %s!\n", *greeting, html.EscapeString(name))
+	if err := s.DB.Create(&employee).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, employee)
 }
